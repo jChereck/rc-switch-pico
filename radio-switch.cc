@@ -95,7 +95,8 @@ static const RCSwitch::Protocol PROGMEM proto[] = {
   { 365, { 18,  1 }, {  3,  1 }, {  1,  3 }, true },     // protocol 10 (1ByOne Doorbell)
   { 270, { 36,  1 }, {  1,  2 }, {  2,  1 }, true },     // protocol 11 (HT12E)
   { 320, { 36,  1 }, {  1,  2 }, {  2,  1 }, true },     // protocol 12 (SM5212)
-  { 400, {  1, 26 }, {  1,  3 }, {  3,  1 }, false }     // protocol 13 (1 modified for new style remote)
+  { 400, {  1, 26 }, {  1,  3 }, {  3,  1 }, false },     // protocol 13 (1 modified for new style remote)
+  { 342, {  1, 23 }, {  1,  3 }, {  3,  1 }, false }     // protocol 14 (1 modified for new style remote)
 };
 
 void RCSwitch::gpio_callback(unsigned int gpio, uint32_t events) {
@@ -505,7 +506,7 @@ void RCSwitch::send(const char* sCodeWord) {
  * bits are sent from MSB to LSB, i.e., first the bit at position length-1,
  * then the bit at position length-2, and so on, till finally the bit at position 0.
  */
-void RCSwitch::send(unsigned long code, unsigned int length) {
+void RCSwitch::send(unsigned long long code, unsigned int length) {
   if (this->nTransmitterPin == -1)
     return;
 
@@ -519,7 +520,7 @@ void RCSwitch::send(unsigned long code, unsigned int length) {
 
   for (int nRepeat = 0; nRepeat < nRepeatTransmit; nRepeat++) {
     for (int i = length-1; i >= 0; i--) {
-      if (code & (1L << i))
+      if (code & ((long long)1L << i))
         this->transmit(protocol.one);
       else
         this->transmit(protocol.zero);
@@ -539,6 +540,46 @@ void RCSwitch::send(unsigned long code, unsigned int length) {
 #endif
 }
 
+/**
+ * Transmit all of each long and then the first length bits of the last long
+ */
+void RCSwitch::sendArr(unsigned long codes[], unsigned int length) {
+  if (this->nTransmitterPin == -1)
+    return;
+
+#if not defined( RCSwitchDisableReceiving )
+  // make sure the receiver is disabled while we transmit
+  int nReceiverInterrupt_backup = nReceiverInterrupt;
+  if (nReceiverInterrupt_backup != -1) {
+    this->disableReceive();
+  }
+#endif
+
+  for (int nRepeat = 0; nRepeat < nRepeatTransmit; nRepeat++) {
+    unsigned long* code = codes;
+    while(code != NULL){
+      code = code +sizeof(long);
+      for (int i = length-1; i >= 0; i--) {
+        if (*code & (1L << i))
+          this->transmit(protocol.one);
+        else
+          this->transmit(protocol.zero);
+      }
+      this->transmit(protocol.syncFactor);
+    }
+  }
+
+  // Disable transmit after sending (i.e., for inverted protocols)
+  // digitalWrite(this->nTransmitterPin, LOW);
+  gpio_put(this->nTransmitterPin, LOW);
+
+#if not defined( RCSwitchDisableReceiving )
+  // enable receiver again if we just disabled it
+  if (nReceiverInterrupt_backup != -1) {
+    this->enableReceive(nReceiverInterrupt_backup);
+  }
+#endif
+}
 /**
  * Transmit a single high-low pulse.
  */
