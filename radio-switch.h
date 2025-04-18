@@ -144,7 +144,7 @@ class RCSwitch {
 
     #if not defined( RCSwitchDisableReceiving )
     static void handleInterrupt();
-    static bool receiveProtocol(const int p, unsigned int changeCount);
+    static int receiveProtocol(const int p, unsigned int changeCount);
     int nReceiverInterrupt;
     #endif
     int nTransmitterPin;
