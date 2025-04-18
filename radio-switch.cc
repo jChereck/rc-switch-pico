@@ -662,9 +662,11 @@ static inline unsigned int diff(int A, int B) {
 }
 
 /**
- *
+ * Returns a match score for how well the received signal matches the protocol
+ * Lower score means better match (like golf scoring)
+ * scoring is done this way to avoid adding a lot of division operations
  */
-bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCount) {
+int RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCount) {
 #if defined(ESP8266) || defined(ESP32)
     const Protocol &pro = proto[p-1];
 #else
@@ -673,10 +675,17 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 #endif
 
     unsigned long code = 0;
+    int matchScore = 0;
     //Assuming the longer pulse length is the pulse captured in timings[0]
     const unsigned int syncLengthInPulses =  ((pro.syncFactor.low) > (pro.syncFactor.high)) ? (pro.syncFactor.low) : (pro.syncFactor.high);
     const unsigned int delay = RCSwitch::timings[0] / syncLengthInPulses;
-    const unsigned int delayTolerance = delay * RCSwitch::nReceiveTolerance / 100;
+    
+    // Calculate tolerance thresholds for each bit pattern
+    const unsigned int zeroTolerance = (delay * (pro.zero.high + pro.zero.low) * RCSwitch::nReceiveTolerance) / 100;
+    const unsigned int oneTolerance = (delay * (pro.one.high + pro.one.low) * RCSwitch::nReceiveTolerance) / 100;
+    
+    // Start with pulse length difference
+    matchScore = abs((int)delay - (int)pro.pulseLength);
     
     /* For protocols that start low, the sync period looks like
      *               _________
@@ -699,16 +708,24 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
 
     for (unsigned int i = firstDataTiming; i < changeCount - 1; i += 2) {
         code <<= 1;
-        if (diff(RCSwitch::timings[i], delay * pro.zero.high) < delayTolerance &&
-            diff(RCSwitch::timings[i + 1], delay * pro.zero.low) < delayTolerance) {
+        
+        // Calculate differences for both possible bit values
+        int zeroDiff = diff(RCSwitch::timings[i], delay * pro.zero.high) + 
+                      diff(RCSwitch::timings[i + 1], delay * pro.zero.low);
+        int oneDiff = diff(RCSwitch::timings[i], delay * pro.one.high) + 
+                     diff(RCSwitch::timings[i + 1], delay * pro.one.low);
+        
+        // If zero is within tolerance and either matches better than one or one is invalid
+        if (zeroDiff <= zeroTolerance && (zeroDiff < oneDiff || oneDiff > oneTolerance)) {
             // zero
-        } else if (diff(RCSwitch::timings[i], delay * pro.one.high) < delayTolerance &&
-                   diff(RCSwitch::timings[i + 1], delay * pro.one.low) < delayTolerance) {
+            matchScore += zeroDiff;
+        } else if (oneDiff <= oneTolerance) {
             // one
             code |= 1;
+            matchScore += oneDiff;
         } else {
-            // Failed
-            return false;
+            // Neither pattern matches within tolerance
+            return INT_MAX;
         }
     }
 
@@ -717,13 +734,11 @@ bool RECEIVE_ATTR RCSwitch::receiveProtocol(const int p, unsigned int changeCoun
         RCSwitch::nReceivedBitlength = (changeCount - 1) / 2;
         RCSwitch::nReceivedDelay = delay;
         RCSwitch::nReceivedProtocol = p;
-        return true;
+        return matchScore;
     }
 
-    return false;
+    return INT_MAX; // Return maximum value for invalid transmissions
 }
-
-
 
 void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   
@@ -731,7 +746,6 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   static unsigned long lastTime = 0;
   static unsigned int repeatCount = 0;
 
-  // const long time = micros();
   const long time = to_us_since_boot(get_absolute_time());
   const unsigned int duration = time - lastTime;
   
@@ -748,12 +762,22 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
       // with roughly the same gap between them).
       repeatCount++;
       if (repeatCount == 2) {
+        int bestMatchScore = INT_MAX;
+        int bestProtocol = 0;
+        
         for(unsigned int i = 1; i <= numProto; i++) {
-          if (receiveProtocol(i, changeCount)) {
-            // receive succeeded for protocol i
-            break;
+          int matchScore = receiveProtocol(i, changeCount);
+          if (matchScore < bestMatchScore) {
+            bestMatchScore = matchScore;
+            bestProtocol = i;
           }
         }
+        
+        if (bestMatchScore < INT_MAX) {
+          // Re-run the best matching protocol to set the final values
+          receiveProtocol(bestProtocol, changeCount);
+        }
+        
         repeatCount = 0;
       }
     }
@@ -770,3 +794,5 @@ void RECEIVE_ATTR RCSwitch::handleInterrupt() {
   lastTime = time;  
 }
 #endif
+
+
