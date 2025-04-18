@@ -36,6 +36,7 @@
 // Include libraries for RPi:
 #include <string.h> /* memcpy */
 #include <stdlib.h> /* abs */
+#include <climits>  /* INT_MAX */
     
 
 
